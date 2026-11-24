@@ -1191,6 +1191,59 @@ function reqView(){ const rows=DB.changeReqs.filter(r=>USER.master||r.by===USER.
 /* init.js – starts the app after every module has registered its screens */
 load(); migrate(); migrateEcom(); migrateEbiz(); migrateCo(); TAB='Dashboards'; SEL.dash=ROLE_DASH[USER.role]||'Owner';
 $('#role').innerHTML=ROLES.map(r=>`<option ${r===USER.role?'selected':''}>${r}</option>`).join('');
+/* v5.js – public storefront (no login), login/registration for ERP, CSV/PDF downloads on every table, Ratio Analysis tab */
+TABS.splice(TABS.indexOf('Accounting Cycle')+1,0,'Ratio Analysis');
+function enterGuest(){ USER.role='Customer'; USER.guest=true; USER.cust=null; USER.sup=null; USER.master=false; USER.adm=[]; USER.xr=[]; USER.home=null; USER.uname=null; USER.name='Guest'; SEL.shopper=''; CHAT=[]; ADMIN_OK=false;
+  document.body.classList.remove('locked'); $('#gate').hidden=true; $('#role').parentElement.hidden=true; $('#who').textContent='Guest (browsing)'; TAB='Storefront'; render(); }
+function showGate(m){ $('#gate').hidden=false; gRender(m); }
+gateStart=function(){ let n=null; try{ n=sessionStorage.getItem('erp_session'); }catch(e){} const a=n&&users().find(x=>x.u===n); if(a) gStart(a); else enterGuest(); };
+{ const gs0=gStart; gStart=function(a){ USER.guest=false; gs0(a); };
+  const go0=gOut; gOut=function(){ go0(); enterGuest(); };
+  const gr0=gRender; gRender=function(m){ gr0(m); const b=document.querySelector('#gate .gbox'); if(USER.guest&&b) b.insertAdjacentHTML('beforeend','<button class="x" style="width:100%;margin-top:12px;height:44px" onclick="$(\'#gate\').hidden=true">Back to the storefront</button>'); };
+  const need=()=>{ toast('Please register or log in to do this. Your cart is kept.'); showGate('reg'); };
+  [['checkout'],['addReview'],['regCustomer']].forEach(([n])=>{ const f=window[n]; window[n]=function(){ if(USER.guest) return need(); return f.apply(this,arguments); }; }); }
+/* downloads */
+const csvq=s=>{ s=String(s).replace(/\s+/g,' ').trim(); if(/^[=@]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };
+function saveFile(name,text,type){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+text],{type:type||'text/csv;charset=utf-8'})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Downloaded '+name); }
+function tblTitle(t){ let e=t; while(e&&e!==$('#main')){ let p=e.previousElementSibling; while(p){ if(/^H[23]$/.test(p.tagName)) return p.textContent.trim(); p=p.previousElementSibling; } e=e.parentElement; } return TAB; }
+function tblCsv(t){ const rows=[...t.rows].map(r=>[...r.cells].map(c=>c.textContent)), keep=rows[0].map((h,i)=>h.trim()!==''||rows.slice(1).some(r=>(r[i]||'').trim()!=='')&&false); const ix=rows[0].map((h,i)=>i).filter(i=>rows[0][i].trim()!==''); return rows.map(r=>ix.map(i=>csvq(r[i]||'')).join(',')).join('\r\n'); }
+const slug=s=>s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40)||'table';
+function dlTable(t){ saveFile('rupa-'+slug(tblTitle(t))+'-'+today()+'.csv',tblCsv(t)); }
+function dlAll(){ const out=[...$('#main').querySelectorAll('table')].map(t=>csvq(tblTitle(t))+'\r\n'+tblCsv(t)); if(!out.length) return toast('No tables on this page.'); saveFile('rupa-'+slug(TAB)+'-'+today()+'.csv',out.join('\r\n\r\n')); }
+function dlPrice(){ saveFile('rupa-price-list-'+today()+'.csv',['Code,Product,Category,Price (BDT),In stock'].concat(DB.products.map(p=>[p.id,p.name,p.category,p.price,p.qty>0?'Yes':'Out of stock'].map(csvq).join(','))).join('\r\n')); }
+/* ratio analysis */
+VIEWS['Ratio Analysis']=()=>{ const f=FS(), pd=+SEL.pd>0?+SEL.pd:365, d=dv, dio=d(f.inv,f.cogs)*pd, dso=d(f.trec,f.rev)*pd, dpo=d(f.ap,f.cogs)*pd;
+  const P=n=>fx(n,'%'), X=n=>fx(n,'t'), D=n=>fx(n,'d');
+  const L=[['Liquidity','Current ratio',d(f.CA,f.CL),X,'h',1.5,1,'1.5 or more','Short-term assets cover short-term debts.'],['Liquidity','Quick ratio',d(f.cash+f.trec,f.CL),X,'h',1,.7,'1.0 or more','Can pay bills without selling stock.'],['Liquidity','Cash ratio',d(f.cash,f.CL),X,'h',.2,.1,'0.2 or more','Cash on hand against current debts.'],
+   ['Profitability','Gross margin',d(f.gp,f.rev),P,'h',.4,.25,'40% or more','Profit left after the cost of goods.'],['Profitability','Net profit margin',d(f.np,f.rev),P,'h',.1,.03,'10% or more','Profit kept from each taka of sales.'],['Profitability','Return on assets',d(f.np,f.TA),P,'h',.08,.03,'8% or more','Profit earned by all assets.'],['Profitability','Return on equity',d(f.np,f.EQ),P,'h',.15,.05,'15% or more','Return to the owners.'],
+   ['Efficiency','Days inventory (DIO)',dio,D,'l',90,150,'90 days or less','Time stock sits before sale.'],['Efficiency','Days sales outstanding (DSO)',dso,D,'l',30,60,'30 days or less','Time customers take to pay.'],['Efficiency','Days payables (DPO)',dpo,D,'n',0,0,'Longer helps cash, but keep suppliers happy','Time you take to pay suppliers.'],['Efficiency','Cash conversion cycle',dio+dso-dpo,D,'l',60,120,'60 days or less','Days cash is tied up in operations.'],['Efficiency','Total asset turnover',d(f.rev,f.TA),X,'h',1,.5,'1.0 or more','Sales per taka of assets.'],
+   ['Solvency','Debt ratio',d(f.CL,f.TA),P,'l',.5,.7,'50% or less','Share of assets funded by creditors.'],['Solvency','Debt to equity',d(f.CL,f.EQ),X,'l',1,2,'1.0 or less','Creditors compared with owners.']];
+  const st=r=>{ const v=r[2]; if(v==null||!isFinite(v)||r[4]==='n') return ['n/a','']; const ok=r[4]==='h'?v>=r[5]:v<=r[5], mid=r[4]==='h'?v>=r[6]:v<=r[6]; return ok?['Good','good']:mid?['Watch','']:['Weak','warn']; };
+  const S=L.map(st), g=S.filter(x=>x[0]==='Good').length, w=S.filter(x=>x[0]==='Watch').length, k=S.filter(x=>x[0]==='Weak').length, nm=d(f.np,f.rev), at=d(f.rev,f.TA), em=d(f.TA,f.EQ);
+  return '<h2>Financial ratio analysis</h2>'+why('Ratios turn the statements into signals. Each row is compared with a teaching rule of thumb. Real benchmarks differ by industry, so compare with similar firms and with earlier periods. Closing balances are used, over the number of days entered below.')
+  +`<div class="form"><label>Days in the period <input type="number" min="1" value="${pd}" onchange="SEL.pd=+this.value;render()" style="width:100px"></label></div>`
+  +`<div class="kpis">${kpi('Ratios rated Good',g)}${kpi('Ratios to Watch',w)}${kpi('Weak ratios',k)}${kpi('Return on equity',P(d(f.np,f.EQ)))}</div>`
+  +'<h3>Ratio scorecard</h3>'+tbl(['Group','Ratio','Value','Rule of thumb','Rating','What it tells you'],L.map((r,i)=>[r[0],r[1],r[3](r[2]),r[7],`<span class="${S[i][1]}">${S[i][0]}</span>`,r[8]]))
+  +'<h3>DuPont breakdown of return on equity</h3>'+tbl(['Step','Value','Meaning'],[['Net profit margin',P(nm),'Profitability: profit per taka of sales'],['x Asset turnover',X(at),'Efficiency: sales per taka of assets'],['x Equity multiplier',X(em),'Leverage: assets per taka of owners\u2019 equity'],Object.assign(['= Return on equity',P(nm*at*em),'Shows whether returns come from margin, efficiency or borrowing'],{cls:'tot'})])
+  +'<p>The full list of 30 or more ratios, with formulas, is in <b>Accounting Cycle</b> then <b>Ratios</b>.</p>'; };
+/* page tools added after every render */
+{ const r9=render; render=function(){ r9(); const m=$('#main'); if(!m) return; const shop=USER.role==='Customer'; document.body.classList.toggle('shop',shop);
+  m.querySelectorAll('table').forEach(t=>{ if(shop) return; if(t.nextElementSibling&&t.nextElementSibling.classList.contains('dl')) return; const d=document.createElement('div'); d.className='dl noprint'; const b=document.createElement('button'); b.className='x'; b.textContent='Download CSV'; b.onclick=()=>dlTable(t); d.appendChild(b); t.after(d); });
+  let bar='', n=m.querySelectorAll('table').length; if(n&&!shop) bar+='<button class="x" onclick="window.print()">Print / Save as PDF</button><button class="x" onclick="dlAll()">Download all tables (CSV)</button>'; 
+  if(shop){ const sh=$('#sh'); if(sh&&sh.closest('.form')) sh.closest('.form').remove(); const rh=m.querySelector('.rolehelp'); if(rh) rh.remove();
+    m.insertAdjacentHTML('afterbegin','<div class="shopbar noprint"><span class="sbrand">\u2726 Rupa Crafts</span>'+(USER.guest?'<button onclick="showGate(\'reg\')">Register</button>':'<span class="sname">'+esc(USER.name||'')+'</span><button onclick="gOut()">Sign out</button>')+'</div>'); }
+  if(bar) m.insertAdjacentHTML('beforeend','<div class="form noprint" style="flex-direction:row;flex-wrap:wrap;margin-top:18px">'+bar+'<button class="x" onclick="window.scrollTo({top:0,behavior:\'smooth\'})">\u2191 Back to top</button></div>');
+  document.querySelectorAll('header .hc>button').forEach(x=>{ if(x.dataset.so||(x.getAttribute('onclick')||'').includes('gOut')){ x.dataset.so='1'; x.hidden=false; x.textContent=USER.guest?'Log in / Register':'Sign out'; if(USER.guest) x.setAttribute('onclick',"showGate('login')"); else x.setAttribute('onclick','gOut()'); } }); }; }
+{ const b=document.createElement('button'); b.id='totop'; b.textContent='\u2191'; b.setAttribute('aria-label','Back to top'); b.onclick=()=>window.scrollTo({top:0,behavior:'smooth'}); document.body.appendChild(b); if(window.addEventListener) window.addEventListener('scroll',()=>{ b.style.display=(window.scrollY||document.documentElement.scrollTop)>300?'block':'none'; },{passive:true}); }
+{ const st=document.createElement('style'); st.textContent='@media print{#botb,#botp,#gate,.dl{display:none!important}}#totop{position:fixed;left:16px;bottom:22px;z-index:50;width:48px;height:48px;border-radius:50%;display:none;background:var(--brand);color:#fff;border:0;font-size:22px;box-shadow:0 4px 12px rgba(0,0,0,.35)}@media print{#totop{display:none!important}}.dl{margin:4px 0 10px}body.shop>header,body.shop #nav{display:none}body.shop main{padding-top:10px}.shopbar{position:sticky;top:0;z-index:6;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;margin:0 0 14px;border-radius:14px;background:linear-gradient(135deg,var(--brand),#4a1b40);color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.25)}.sbrand{font-family:Georgia,serif;font-size:20px;font-weight:700;letter-spacing:.5px}.shopbar .sname{margin-left:auto;font-size:14px;opacity:.9}.shopbar button{background:var(--gold);border:0;color:#fff;font-weight:700;padding:9px 20px;border-radius:999px}.dl button{padding:3px 10px;font-size:13px}'; document.head.appendChild(st); }
+
+/* storefront downloads panel */
+function dlReceipt(){ const id=($('#rcsel')||{}).value, o=DB.webOrders.find(x=>x.id===id); if(!o) return toast('Choose an order first.'); const c=DB.customers.find(x=>x.id===o.cust)||{name:''};
+  const L=['Rupa Crafts Ltd - Order receipt','Order: '+o.id,'Date: '+o.date,'Customer: '+c.name,'Payment: '+o.method,'','Item,Qty'].concat(o.lines.map(l=>{ const p=prod(l.pid); return (p?p.name:l.pid)+','+l.qty; }),['','Total incl. VAT (BDT): '+fmt(o.total)]); saveFile('rupa-receipt-'+o.id+'.txt',L.join('\r\n'),'text/plain;charset=utf-8'); }
+{ const r8=render; render=function(){ r8(); const m=$('#main'); return; const mine=DB.webOrders.filter(o=>o.cust===(USER.cust||SEL.shopper));
+  const pn='<div class="why noprint" id="dlpanel"><b>Downloads:</b> <button onclick="dlPrice()">Price list (CSV)</button> <button onclick="window.print()">Catalogue (Print / Save as PDF)</button>'+(mine.length?` <select id="rcsel" aria-label="Choose an order">${mine.map(o=>`<option>${o.id}</option>`).join('')}</select> <button onclick="dlReceipt()">Order receipt</button>`:' <small>Order receipts appear here after you place an order.</small>')+'</div>';
+  const g=m.querySelector('.why.noprint'); if(g) g.insertAdjacentHTML('afterend',pn); else m.insertAdjacentHTML('afterbegin',pn); m.insertAdjacentHTML('beforeend',pn.replace('id="dlpanel"','').replace('id="rcsel"','')); }; }
+
 render(); gateStart();
 </script>
 </body></html>
